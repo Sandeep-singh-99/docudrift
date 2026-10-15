@@ -5,3 +5,5 @@ __pycache__/
 falkordb_data/
 .pytest_cache/
 .DS_Store
+lib/
+

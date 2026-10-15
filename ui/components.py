@@ -32,7 +32,7 @@ def render_interactive_graph(nodes_data: List[Dict[str, Any]], edges_data: List[
     """
     Renders an interactive PyVis physics graph inside Streamlit.
     """
-    net = Network(height=height, width="100%", bgcolor="#0f172a", font_color="#f8fafc", directed=True)
+    net = Network(height=height, width="100%", bgcolor="#0f172a", font_color="#f8fafc", directed=True, cdn_resources="in_line")
     net.barnes_hut(gravity=-3000, central_gravity=0.3, spring_length=120, spring_strength=0.05, damping=0.09)
 
     # Add nodes
@@ -95,14 +95,5 @@ def render_interactive_graph(nodes_data: List[Dict[str, Any]], edges_data: List[
             width=2
         )
 
-    # Save to temp file and return HTML
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w", encoding="utf-8") as f:
-        net.save_graph(f.name)
-        with open(f.name, "r", encoding="utf-8") as rf:
-            html = rf.read()
-    try:
-        os.remove(f.name)
-    except Exception:
-        pass
-
-    return html
+    # Directly generate HTML string without saving to disk or creating local lib folder
+    return net.generate_html()
