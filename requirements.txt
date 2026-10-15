@@ -1,0 +1,16 @@
+# DocuDrift / LivingWiki Dependencies
+falkordb>=1.0.8
+streamlit>=1.35.0
+langgraph>=0.2.0
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-groq>=0.1.5
+groq>=0.9.0
+tavily-python>=0.3.3
+python-dotenv>=1.0.1
+pydantic>=2.7.0
+networkx>=3.2.1
+pyvis>=0.3.2
+pandas>=2.2.0
+plotly>=5.22.0
+rich>=13.7.0
