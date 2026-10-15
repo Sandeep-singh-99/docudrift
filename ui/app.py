@@ -111,23 +111,6 @@ with st.sidebar:
         st.warning(f"🟡 **{db_status['mode']}**\n(Docker standby - run `docker compose up -d` for live FalkorDB server)")
 
     st.markdown("---")
-    st.subheader("🔑 AI & Search Keys")
-    groq_api_key = st.text_input("Groq API Key", type="password", value=os.getenv("GROQ_API_KEY", ""), help="Get your free key at https://console.groq.com")
-    if groq_api_key:
-        os.environ["GROQ_API_KEY"] = groq_api_key
-
-    groq_model = st.selectbox(
-        "Groq LLM Model",
-        ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
-        index=0
-    )
-    os.environ["GROQ_MODEL"] = groq_model
-
-    tavily_api_key = st.text_input("Tavily API Key (Optional)", type="password", value=os.getenv("TAVILY_API_KEY", ""), help="Used for external web verification at https://tavily.com")
-    if tavily_api_key:
-        os.environ["TAVILY_API_KEY"] = tavily_api_key
-
-    st.markdown("---")
     st.subheader("⚡ Graph Actions")
     if st.button("🔄 Reset & Re-Seed Enterprise Graph", use_container_width=True):
         seed_res = seed_falkordb_graph()
