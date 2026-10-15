@@ -95,9 +95,9 @@ st.markdown("""
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "seeded" not in st.session_state:
-    # Auto-seed initial demo graph
     seed_falkordb_graph()
     st.session_state.seeded = True
+
 
 # --- SIDEBAR CONTROLS ---
 with st.sidebar:
@@ -203,12 +203,16 @@ with tab1:
     st.caption("FalkorDB evaluates documentation age against merged code pull requests and modified API endpoints.")
 
     drift_data = calculate_staleness_and_drift()
-    df_drift = pd.DataFrame(drift_data)
+    if not drift_data and db_manager.is_fallback:
+        seed_falkordb_graph()
+        drift_data = calculate_staleness_and_drift()
+
+    df_drift = pd.DataFrame(drift_data) if drift_data else pd.DataFrame()
 
     # Top KPI Metrics
     total_docs = len(df_drift)
-    critical_docs = len(df_drift[df_drift["status"] == "CRITICAL DRIFT"])
-    avg_score = int(df_drift["drift_score"].mean()) if not df_drift.empty else 0
+    critical_docs = len(df_drift[df_drift["status"] == "CRITICAL DRIFT"]) if not df_drift.empty and "status" in df_drift.columns else 0
+    avg_score = int(df_drift["drift_score"].mean()) if not df_drift.empty and "drift_score" in df_drift.columns else 0
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Monitored Doc Pages", total_docs, "Living Wiki")
@@ -248,11 +252,14 @@ with tab1:
     with col_table:
         st.markdown("##### 📋 Monitored Documentation Status")
         if not df_drift.empty:
+            cols = [c for c in ["doc_title", "service_name", "last_updated", "pr_count", "drift_score", "status"] if c in df_drift.columns]
             st.dataframe(
-                df_drift[["doc_title", "service_name", "last_updated", "pr_count", "drift_score", "status"]],
+                df_drift[cols] if cols else df_drift,
                 use_container_width=True,
                 hide_index=True
             )
+        else:
+            st.info("No documentation records found. Click 'Reset & Re-Seed Enterprise Graph' in the sidebar.")
 
     st.markdown("##### 🚨 Active Drift Breakdown")
     for doc in drift_data:

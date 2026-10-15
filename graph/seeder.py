@@ -317,3 +317,8 @@ def seed_falkordb_graph() -> Dict[str, Any]:
         "mode": "FalkorDB Live Server",
         "statements_executed": len(cypher_statements)
     }
+
+# Auto-seed in fallback mode if empty so all features work immediately out-of-the-box
+if db_manager.is_fallback and len(db_manager._fallback_instance.nodes) == 0:
+    seed_falkordb_graph()
+
