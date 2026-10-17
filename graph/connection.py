@@ -5,10 +5,42 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+class FalkorDBResultWrapper:
+    """
+    Universal wrapper ensuring full compatibility between live falkordb.QueryResult,
+    FalkorDBResultMock, and standard Python iterable/sequence interfaces.
+    """
+    def __init__(self, raw_result: Any):
+        if hasattr(raw_result, "result_set"):
+            self.result_set = raw_result.result_set if raw_result.result_set is not None else []
+            self.header = getattr(raw_result, "header", []) or []
+        elif isinstance(raw_result, list):
+            self.result_set = raw_result
+            self.header = []
+        else:
+            self.result_set = []
+            self.header = []
+
+    def __iter__(self):
+        return iter(self.result_set)
+
+    def __len__(self):
+        return len(self.result_set)
+
+    def __getitem__(self, idx):
+        return self.result_set[idx]
+
+    def __bool__(self):
+        return len(self.result_set) > 0
+
+    def __repr__(self):
+        return f"FalkorDBResultWrapper(rows={len(self.result_set)}, header={self.header})"
+
+
 class FalkorDBResultMock:
     """Mock result set that mirrors falkordb-py result structure."""
     def __init__(self, result_set: List[List[Any]], header: Optional[List[str]] = None):
-        self.result_set = result_set
+        self.result_set = result_set or []
         self.header = header or []
 
     def __iter__(self):
@@ -16,6 +48,12 @@ class FalkorDBResultMock:
 
     def __len__(self):
         return len(self.result_set)
+
+    def __getitem__(self, idx):
+        return self.result_set[idx]
+
+    def __bool__(self):
+        return len(self.result_set) > 0
 
 
 class InMemoryFalkorFallback:
@@ -199,19 +237,23 @@ class FalkorDBManager:
             self.graph = self._fallback_instance
             return False
 
-    def query(self, cypher_query: str, params: Optional[Dict[str, Any]] = None):
+    def query(self, cypher_query: str, params: Optional[Dict[str, Any]] = None) -> FalkorDBResultWrapper:
         """Execute a Cypher query on FalkorDB or the fallback engine."""
         if not self.is_connected or self.is_fallback:
             # Try reconnecting in case Docker just spun up
             if self.connect():
-                return self.graph.query(cypher_query, params)
-            return self._fallback_instance.query(cypher_query, params)
+                raw = self.graph.query(cypher_query, params)
+                return FalkorDBResultWrapper(raw)
+            raw = self._fallback_instance.query(cypher_query, params)
+            return FalkorDBResultWrapper(raw)
         try:
-            return self.graph.query(cypher_query, params)
+            raw = self.graph.query(cypher_query, params)
+            return FalkorDBResultWrapper(raw)
         except Exception as e:
             # If connection dropped, retry once
             if self.connect():
-                return self.graph.query(cypher_query, params)
+                raw = self.graph.query(cypher_query, params)
+                return FalkorDBResultWrapper(raw)
             raise e
 
     def get_status(self) -> Dict[str, Any]:

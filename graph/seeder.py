@@ -260,7 +260,7 @@ def seed_falkordb_graph() -> Dict[str, Any]:
 
     # DocPages
     for doc in SAMPLE_DATA["doc_pages"]:
-        escaped_content = doc["content"].replace("'", "\\'")
+        escaped_content = doc["content"].replace("\\", "\\\\").replace("'", "\\'").replace("\r", "").replace("\n", "\\n")
         cypher_statements.append(f"""
         MERGE (dp:DocPage {{id: '{doc["id"]}'}})
         SET dp.title = '{doc["title"]}', dp.url = '{doc["url"]}', dp.category = '{doc["category"]}', dp.last_updated = '{doc["last_updated"]}', dp.content = '{escaped_content}'
@@ -268,7 +268,7 @@ def seed_falkordb_graph() -> Dict[str, Any]:
 
     # PRs
     for pr in SAMPLE_DATA["pull_requests"]:
-        escaped_diff = pr["diff_summary"].replace("'", "\\'")
+        escaped_diff = pr["diff_summary"].replace("\\", "\\\\").replace("'", "\\'").replace("\r", "").replace("\n", "\\n")
         cypher_statements.append(f"""
         MERGE (pr:PullRequest {{id: '{pr["id"]}'}})
         SET pr.number = {pr["number"]}, pr.title = '{pr["title"]}', pr.merged_at = '{pr["merged_at"]}', pr.diff_summary = '{escaped_diff}', pr.files_changed = '{pr["files_changed"]}'

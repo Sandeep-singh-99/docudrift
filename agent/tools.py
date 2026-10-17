@@ -25,6 +25,14 @@ def execute_cypher_tool(query_str: str, params: Optional[Dict[str, Any]] = None)
     """Execute raw Cypher query against FalkorDB."""
     try:
         res = db_manager.query(query_str, params)
+        if hasattr(res, "header") and res.header and hasattr(res, "result_set") and res.result_set:
+            formatted = []
+            for row in res.result_set:
+                if len(row) == len(res.header):
+                    formatted.append(dict(zip(res.header, row)))
+                else:
+                    formatted.append(row)
+            return formatted
         return list(res)
     except Exception as e:
         return [{"error": str(e)}]

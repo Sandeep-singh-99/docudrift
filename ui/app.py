@@ -203,11 +203,16 @@ with tab1:
     st.caption("FalkorDB evaluates documentation age against merged code pull requests and modified API endpoints.")
 
     drift_data = calculate_staleness_and_drift()
-    if not drift_data and db_manager.is_fallback:
+    if not drift_data or any("error" in d for d in drift_data):
         seed_falkordb_graph()
         drift_data = calculate_staleness_and_drift()
 
-    df_drift = pd.DataFrame(drift_data) if drift_data else pd.DataFrame()
+    # Filter out any error rows if present
+    valid_drift_data = [d for d in drift_data if "error" not in d]
+    if not valid_drift_data and db_manager._fallback_instance.nodes:
+        # Graceful fallback to standby engine data
+        valid_drift_data = calculate_staleness_and_drift()
+    df_drift = pd.DataFrame(valid_drift_data) if valid_drift_data else pd.DataFrame()
 
     # Top KPI Metrics
     total_docs = len(df_drift)
@@ -299,18 +304,31 @@ with tab2:
             try:
                 n_res = db_manager.query(QUERY_GET_ALL_NODES)
                 for row in n_res:
-                    labels, props = row
-                    nodes.append({"id": props.get("id", str(id(props))), "label": labels[0] if labels else "Node", **props})
+                    if len(row) >= 2:
+                        labels, props = row[0], row[1]
+                        if isinstance(props, dict):
+                            nid = props.get("id") or str(id(props))
+                            lbl = labels[0] if (isinstance(labels, list) and labels) else "Node"
+                            nodes.append({"id": nid, "label": lbl, **props})
                 e_res = db_manager.query(QUERY_GET_ALL_EDGES)
                 for row in e_res:
-                    src_id, src_lbl, src_b_id, src_name, src_title, rel_type, rel_props, tgt_id, tgt_lbl, tgt_b_id, tgt_name, tgt_title = row
-                    edges.append({
-                        "source": src_b_id or str(src_id),
-                        "target": tgt_b_id or str(tgt_id),
-                        "type": rel_type
-                    })
+                    if len(row) >= 12:
+                        src_id, src_lbl, src_b_id, src_name, src_title, rel_type, rel_props, tgt_id, tgt_lbl, tgt_b_id, tgt_name, tgt_title = row[:12]
+                        edges.append({
+                            "source": src_b_id or str(src_id),
+                            "target": tgt_b_id or str(tgt_id),
+                            "type": rel_type
+                        })
             except Exception:
                 pass
+
+        # If live graph has no nodes yet, automatically seed or load topology
+        if not nodes:
+            seed_falkordb_graph()
+            fb = db_manager._fallback_instance
+            for n_id, n in fb.nodes.items():
+                nodes.append({"id": n_id, **n})
+            edges = list(fb.edges)
 
         if nodes and edges:
             graph_html = render_interactive_graph(nodes, edges, height="580px")
