@@ -33,20 +33,103 @@ class InMemoryFalkorFallback:
 
     def query(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> FalkorDBResultMock:
         q = query_str.strip()
+        params = params or {}
 
-        # Handle simple MATCH queries by pattern or return all
-        if "MATCH (d:Developer" in q and "LEFT_COMPANY" in q:
-            # Query for orphaned knowledge
+        # 0. DETACH DELETE
+        if "DETACH DELETE" in q:
+            self.nodes.clear()
+            self.edges.clear()
+            return FalkorDBResultMock([], ["result"])
+
+        # 1. Ping / simple return
+        if q == "RETURN 1 AS ping" or q == "RETURN 1":
+            return FalkorDBResultMock([[1]], ["ping"])
+
+        # 2. Count queries
+        if "count(n)" in q.lower() or "count(*)" in q.lower():
+            return FalkorDBResultMock([[len(self.nodes)]], ["count"])
+
+        # 3. Sample query: Developer listing
+        if "MATCH (d:Developer)" in q and "status" in q:
+            rows = []
+            for n in self.nodes.values():
+                if n.get("label") == "Developer":
+                    rows.append([n.get("name"), n.get("email"), n.get("status")])
+            return FalkorDBResultMock(rows, ["d.name", "d.email", "d.status"])
+
+        # 4. Sample query: Docs -> Services
+        if "[:DOCUMENTS]->" in q:
+            rows = []
+            for edge in self.edges:
+                if edge.get("type") == "DOCUMENTS":
+                    doc = self.nodes.get(edge.get("source"), {})
+                    srv = self.nodes.get(edge.get("target"), {})
+                    rows.append([doc.get("title", "Untitled"), srv.get("name", "Unknown"), doc.get("last_updated", "")])
+            return FalkorDBResultMock(rows, ["doc.title", "s.name", "doc.last_updated"])
+
+        # 5. Sample query: PRs -> Services
+        if "[:MODIFIED]->" in q:
+            rows = []
+            for edge in self.edges:
+                if edge.get("type") == "MODIFIED":
+                    pr = self.nodes.get(edge.get("source"), {})
+                    srv = self.nodes.get(edge.get("target"), {})
+                    rows.append([pr.get("number", 0), pr.get("title", ""), srv.get("name", "Unknown")])
+            return FalkorDBResultMock(rows, ["pr.number", "pr.title", "s.name"])
+
+        # 6. Sample query: Docs -> Endpoints
+        if "[:REFERENCES]->" in q:
+            rows = []
+            for edge in self.edges:
+                if edge.get("type") == "REFERENCES":
+                    doc = self.nodes.get(edge.get("source"), {})
+                    ep = self.nodes.get(edge.get("target"), {})
+                    rows.append([doc.get("title", "Untitled"), ep.get("path", ""), ep.get("deprecated", False)])
+            return FalkorDBResultMock(rows, ["doc.title", "ep.path", "ep.deprecated"])
+
+        # 7. Query all nodes for visualization
+        if "labels(n)" in q and "properties(n)" in q:
+            rows = []
+            for n_id, n in self.nodes.items():
+                lbl = [n.get("label", "Node")]
+                props = {k: v for k, v in n.items() if k != "label"}
+                rows.append([lbl, props])
+            return FalkorDBResultMock(rows, ["labels", "props"])
+
+        # 8. Query all edges for visualization
+        if "-[r]->" in q and "source_label" in q:
+            rows = []
+            for idx, edge in enumerate(self.edges):
+                src_id = edge.get("source")
+                tgt_id = edge.get("target")
+                src = self.nodes.get(src_id, {})
+                tgt = self.nodes.get(tgt_id, {})
+                rows.append([
+                    idx,
+                    src.get("label", "Node"),
+                    src_id,
+                    src.get("name", ""),
+                    src.get("title", ""),
+                    edge.get("type", "RELATED_TO"),
+                    {},
+                    idx + 1000,
+                    tgt.get("label", "Node"),
+                    tgt_id,
+                    tgt.get("name", ""),
+                    tgt.get("title", "")
+                ])
+            return FalkorDBResultMock(rows, ["source_id", "source_label", "source_business_id", "source_name", "source_title", "rel_type", "rel_props", "target_id", "target_label", "target_business_id", "target_name", "target_title"])
+
+        # 9. Orphaned knowledge query
+        if "MATCH (d:Developer" in q and "LEFT_COMPANY" in q or "QUERY_ORPHANED_KNOWLEDGE" in q:
             orphaned = []
             for n_id, n in self.nodes.items():
                 if n.get("label") == "Developer" and n.get("status") == "inactive":
                     dev_name = n.get("name")
-                    # find docs authored by this dev
                     for edge in self.edges:
                         if edge.get("type") == "AUTHORED_BY" and edge.get("target") == n_id:
                             doc = self.nodes.get(edge.get("source"), {})
                             doc_id = doc.get("id")
-                            # check if doc has other active authors
                             authors = [e.get("target") for e in self.edges if e.get("type") == "AUTHORED_BY" and e.get("source") == doc_id]
                             active_authors = [aid for aid in authors if self.nodes.get(aid, {}).get("status") == "active"]
                             if len(active_authors) == 0:
@@ -59,8 +142,8 @@ class InMemoryFalkorFallback:
                                 ])
             return FalkorDBResultMock(orphaned, ["doc_title", "doc_id", "author_name", "last_updated", "service_name"])
 
+        # 10. Alerts or stale docs query
         if "stale" in q.lower() or "drift" in q.lower() or "FLAGGED_STALE" in q:
-            # Return alerts or stale docs
             rows = []
             for n_id, n in self.nodes.items():
                 if n.get("label") == "Alert":
@@ -74,14 +157,11 @@ class InMemoryFalkorFallback:
                     ])
             return FalkorDBResultMock(rows, ["id", "doc_id", "reason", "severity", "created_at", "suggested_patch"])
 
-        if "RETURN count(n)" in q or "count(*)" in q:
-            return FalkorDBResultMock([[len(self.nodes)]], ["count"])
-
-        # Default fallback: return all nodes or empty
+        # Default fallback: return all nodes as rows with id and props
         rows = []
         for n_id, n in self.nodes.items():
-            rows.append([n])
-        return FalkorDBResultMock(rows, ["node"])
+            rows.append([n_id, n.get("label", "Node"), n.get("name") or n.get("title") or n_id, n])
+        return FalkorDBResultMock(rows, ["id", "label", "name_or_title", "properties"])
 
 
 class FalkorDBManager:

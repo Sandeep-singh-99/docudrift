@@ -23,13 +23,14 @@ load_dotenv()
 
 def router_node(state: DocuDriftState) -> Dict[str, Any]:
     """Analyzes user query and routes to the appropriate graph analysis path."""
+    import re
     q = state["query"].lower()
     intent = "qna"
     if any(k in q for k in ["stale", "drift", "audit", "score", "decay"]):
         intent = "drift_audit"
     elif any(k in q for k in ["orphan", "depart", "left", "quit", "bus factor", "maintainer"]):
         intent = "orphan_check"
-    elif any(k in q for k in ["blast", "impact", "radius", "pr #"]):
+    elif any(k in q for k in ["blast", "impact", "radius"]) or re.search(r"\bpr\s*#?\s*\d+\b", q):
         intent = "blast_radius"
     elif any(k in q for k in ["patch", "diff", "fix doc", "update wiki"]):
         intent = "patch_request"
@@ -164,6 +165,39 @@ and test with legacy endpoint `POST /v1/charge`.
 
 **Recommended Action:**
 Do not run `./deploy.sh`. Use Docker Compose and modern `/v2/checkout` as shown in the auto-patch diff below!"""
+    elif intent == "drift_audit":
+        stale_list = graph_ctx.get("stale_docs", [])
+        critical = [d for d in stale_list if d.get("status") == "CRITICAL DRIFT"]
+        warnings = [d for d in stale_list if d.get("status") == "WARNING"]
+        healthy = [d for d in stale_list if d.get("status") == "HEALTHY"]
+
+        audit_lines = [
+            "### 🛰️ FalkorDB Knowledge Staleness & Drift Audit Report\n",
+            f"**Audit Telemetry:**",
+            f"- **Monitored Documentation Assets:** {len(stale_list)}",
+            f"- **🚨 Critical Drift Alerts:** {len(critical)}",
+            f"- **⚠️ Warnings:** {len(warnings)}",
+            f"- **✅ Healthy Documents:** {len(healthy)}\n",
+            "#### 🚨 Critical Drift Findings:"
+        ]
+        if critical:
+            for doc in critical:
+                audit_lines.append(
+                    f"- **{doc.get('doc_title')}** (`{doc.get('service_name')}`)\n"
+                    f"  - **Drift Score:** `{doc.get('drift_score')} pts` (Last updated: {doc.get('last_updated')})\n"
+                    f"  - **Drift Factors:** {doc.get('pr_count')} merged PR(s) and {doc.get('endpoint_pr_count')} modified endpoint(s).\n"
+                    f"  - **Action:** Auto-patch diff available via Sentinel."
+                )
+        else:
+            audit_lines.append("No critical drift detected.")
+
+        if warnings:
+            audit_lines.append("\n#### ⚠️ Warning Assets:")
+            for doc in warnings:
+                audit_lines.append(f"- **{doc.get('doc_title')}** (`{doc.get('service_name')}`) — Drift Score: {doc.get('drift_score')} pts")
+
+        audit_lines.append("\n*Calculated via FalkorDB graph algorithm: `Drift = (Merged PRs * 15) + (Modified Endpoints * 20)`*")
+        final_text = "\n".join(audit_lines)
     elif intent == "orphan_check":
         final_text = """### 🚨 Orphaned Knowledge Alert: Bus Factor 0 Detected
 
@@ -177,11 +211,23 @@ FalkorDB graph traversal discovered **1 critical service document** with 0 activ
 - **Diana Prince** (`diana@acme.corp`) has merged 3 recent PRs touching this service. The agent recommends assigning Diana as the new documentation owner."""
     elif intent == "blast_radius":
         blast = graph_ctx.get("blast_radius", {})
+        services_str = ", ".join(blast.get("affected_services", [])) or "None directly linked"
+        endpoints_str = ", ".join(blast.get("affected_endpoints", [])) or "None directly modified"
+        docs_str = ", ".join(blast.get("affected_docs", [])) or "No documentation pages directly impacted"
+        score = blast.get("blast_score", 0)
+        level = "CRITICAL" if score >= 10 else ("HIGH" if score >= 5 else "MODERATE")
+
         final_text = f"""### 💥 Blast Radius Impact Analysis: PR #{blast.get('pr_number', 310)}
-- **Title:** {blast.get('title', 'Migrate deploy script')}
-- **Affected Endpoints:** {', '.join(blast.get('affected_endpoints', ['POST /v1/charge', 'POST /v2/checkout']))}
-- **Affected Documentation Pages:** {', '.join(blast.get('affected_docs', ['Deploying Payment Gateway & Processing Payments']))}
-- **Calculated Blast Score:** {blast.get('blast_score', 8)} (High Impact)"""
+- **Title:** {blast.get('title', 'Pull Request Analysis')}
+- **Diff Summary:** {blast.get('diff_summary', 'Code modifications')}
+- **Impact Level:** `{level}` (Blast Score: **{score}**)
+
+**Downstream Blast Entities:**
+- **⚙️ Affected Services:** {services_str}
+- **🔌 Affected Endpoints:** {endpoints_str}
+- **📄 Affected Documentation Pages:** {docs_str}
+
+*Multi-hop reasoning traversed connected entities across FalkorDB knowledge graph.*"""
     else:
         final_text = """### 🛰️ DocuDrift Knowledge Graph Status
 FalkorDB is continuously monitoring documentation drift across services, pull requests, and developer activity.

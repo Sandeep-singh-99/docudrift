@@ -121,9 +121,10 @@ with st.sidebar:
         # Simulate PR 320 merging into inventory
         if db_manager.is_fallback:
             fb = db_manager._fallback_instance
+            pr_num = len(fb.nodes) + 400
             new_pr = {
-                "id": f"pr_{len(fb.nodes) + 400}",
-                "number": len(fb.nodes) + 400,
+                "id": f"pr_{pr_num}",
+                "number": pr_num,
                 "title": "Migrate InventoryAPI to gRPC protocol v2",
                 "merged_at": datetime.now().strftime("%Y-%m-%d"),
                 "diff_summary": "Replaced REST endpoints with gRPC protobuf definitions.",
@@ -132,6 +133,22 @@ with st.sidebar:
             fb.nodes[new_pr["id"]] = {"label": "PullRequest", **new_pr}
             fb.edges.append({"type": "MODIFIED", "source": new_pr["id"], "target": "srv_inventory"})
             st.toast("⚡ PR merged! Drift score increased for Inventory docs.", icon="🚨")
+        else:
+            pr_num = 320
+            try:
+                db_manager.query(f"""
+                MERGE (pr:PullRequest {{id: 'pr_{pr_num}'}})
+                SET pr.number = {pr_num}, pr.title = 'Migrate InventoryAPI to gRPC protocol v2',
+                    pr.merged_at = '{datetime.now().strftime("%Y-%m-%d")}',
+                    pr.diff_summary = 'Replaced REST endpoints with gRPC protobuf definitions.',
+                    pr.files_changed = 'proto/inventory.proto, server.go'
+                WITH pr
+                MATCH (s:Service {{id: 'srv_inventory'}})
+                MERGE (pr)-[:MODIFIED]->(s)
+                """)
+                st.toast("⚡ PR merged! Drift score increased for Inventory docs.", icon="🚨")
+            except Exception as e:
+                st.error(f"Error simulating PR: {e}")
         st.rerun()
 
     st.markdown("---")
@@ -375,8 +392,26 @@ with tab3:
                     st.code(msg["diff"], language="diff")
 
                     c_act1, c_act2 = st.columns([1, 4])
-                    if c_act1.button("✅ Approve & Auto-Create PR", key=f"btn_approve_{hash(msg['content'])}"):
-                        st.success("🎉 Pull Request #402 opened: `[DocuDrift] Auto-patch stale PaymentGateway docs`!")
+                    approve_key = f"btn_approve_{abs(hash(msg.get('content', '')))}"
+                    if c_act1.button("✅ Approve & Auto-Create PR", key=approve_key):
+                        # Apply documentation patch to graph
+                        if db_manager.is_fallback:
+                            fb = db_manager._fallback_instance
+                            if "doc_payment_deploy" in fb.nodes:
+                                fb.nodes["doc_payment_deploy"]["last_updated"] = datetime.now().strftime("%Y-%m-%d")
+                            # Remove or resolve alert
+                            if "alert_drift_payment" in fb.nodes:
+                                del fb.nodes["alert_drift_payment"]
+                            fb.edges = [e for e in fb.edges if e.get("target") != "alert_drift_payment" and e.get("source") != "alert_drift_payment"]
+                        else:
+                            try:
+                                db_manager.query(f"MATCH (d:DocPage {{id: 'doc_payment_deploy'}}) SET d.last_updated = '{datetime.now().strftime('%Y-%m-%d')}'")
+                                db_manager.query("MATCH (a:Alert {id: 'alert_drift_payment'}) DETACH DELETE a")
+                            except Exception:
+                                pass
+                        st.session_state["patch_applied"] = True
+                        st.success("🎉 Pull Request #402 merged into main! Documentation updated to Docker Compose & /v2/checkout. Drift Score resolved to 0.")
+                        st.rerun()
 
 
 # ==========================================
@@ -405,11 +440,28 @@ with tab4:
 
             for cand in item.get("suggested_maintainers", []):
                 col_cand, col_btn = st.columns([3, 1])
+                cand_name = cand.get('name')
                 with col_cand:
-                    st.markdown(f"**👤 {cand.get('name')}** (`{cand.get('email')}`) — **{cand.get('recent_prs')} recent PRs merged** into this service.")
+                    st.markdown(f"**👤 {cand_name}** (`{cand.get('email')}`) — **{cand.get('recent_prs')} recent PRs merged** into this service.")
                 with col_btn:
-                    if st.button(f"Assign to {cand.get('name')}", key=f"btn_{cand.get('name')}"):
-                        st.success(f"Ownership assigned to {cand.get('name')}! Slack notification dispatched.")
+                    if st.button(f"Assign to {cand_name}", key=f"btn_{cand_name}_{item.get('doc_id')}"):
+                        # Assign in graph
+                        if db_manager.is_fallback:
+                            fb = db_manager._fallback_instance
+                            cand_dev_id = None
+                            for nid, n in fb.nodes.items():
+                                if n.get("label") == "Developer" and n.get("name") == cand_name:
+                                    cand_dev_id = nid
+                                    break
+                            if cand_dev_id:
+                                fb.edges.append({"type": "AUTHORED_BY", "source": item.get("doc_id"), "target": cand_dev_id})
+                        else:
+                            try:
+                                db_manager.query(f"MATCH (doc:DocPage {{id: '{item.get('doc_id')}'}}), (dev:Developer {{name: '{cand_name}'}}) MERGE (doc)-[:AUTHORED_BY]->(dev)")
+                            except Exception:
+                                pass
+                        st.success(f"🎉 Ownership assigned to {cand_name}! Bus factor increased to 1.")
+                        st.rerun()
     else:
         st.success("🎉 No orphaned knowledge found! All documentation pages have active maintainers.")
 
@@ -421,25 +473,37 @@ with tab5:
     st.subheader("💥 Pull Request Blast Radius & Impact Analyzer")
     st.caption("Track 01 Connected Data: Traces ripple effects across endpoints, doc pages, and downstream services.")
 
-    pr_input = st.number_input("Enter Pull Request # to analyze", value=315, step=1)
+    pr_input = st.number_input("Enter Pull Request # to analyze", value=310, step=1)
     if st.button("Calculate Blast Radius", use_container_width=True):
-        impact = get_blast_radius_impact(pr_input)
+        impact = get_blast_radius_impact(int(pr_input))
 
         if "error" in impact:
             st.warning(impact["error"])
         else:
-            col_b1, col_b2, col_b3 = st.columns(3)
+            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
             col_b1.metric("PR Number", f"#{impact.get('pr_number')}")
-            col_b2.metric("Blast Score", impact.get("blast_score", 0), "Impact Level: HIGH")
-            col_b3.metric("Affected Docs", len(impact.get("affected_docs", [])))
+            col_b2.metric("Blast Score", impact.get("blast_score", 0), "FalkorDB Multi-Hop")
+            col_b3.metric("Affected Services", len(impact.get("affected_services", [])))
+            col_b4.metric("Affected Docs", len(impact.get("affected_docs", [])))
 
-            st.markdown("##### 🔌 Affected Endpoints:")
-            for ep in impact.get("affected_endpoints", []):
-                st.markdown(f"- <code>{ep}</code>", unsafe_allow_html=True)
+            st.markdown(f"**PR Title:** `{impact.get('title', '')}`")
+            if impact.get("diff_summary"):
+                st.info(f"**Diff Summary:** {impact.get('diff_summary')}")
 
-            st.markdown("##### 📄 Affected Documentation Pages:")
-            for doc in impact.get("affected_docs", []):
-                st.markdown(f"- **{doc}**")
+            if impact.get("affected_services"):
+                st.markdown("##### ⚙️ Affected Microservices:")
+                for srv in impact.get("affected_services", []):
+                    st.markdown(f"- <code>{srv}</code>", unsafe_allow_html=True)
+
+            if impact.get("affected_endpoints"):
+                st.markdown("##### 🔌 Affected Endpoints:")
+                for ep in impact.get("affected_endpoints", []):
+                    st.markdown(f"- <code>{ep}</code>", unsafe_allow_html=True)
+
+            if impact.get("affected_docs"):
+                st.markdown("##### 📄 Affected Documentation Pages:")
+                for doc in impact.get("affected_docs", []):
+                    st.markdown(f"- **{doc}**")
 
 
 # ==========================================

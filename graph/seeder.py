@@ -29,6 +29,7 @@ SAMPLE_DATA = {
         {"id": "ep_v2_checkout", "path": "/v2/checkout", "method": "POST", "description": "Modern checkout endpoint supporting multi-currency and idempotency keys.", "deprecated": False, "current_status": "PRODUCTION"},
         {"id": "ep_auth_token", "path": "/auth/token", "method": "POST", "description": "Exchange client credentials or refresh token for RS256 JWT.", "deprecated": False, "current_status": "PRODUCTION"},
         {"id": "ep_notify_dispatch", "path": "/notify/dispatch", "method": "POST", "description": "Direct message trigger queue.", "deprecated": False, "current_status": "PRODUCTION"},
+        {"id": "ep_inventory_reserve", "path": "/inventory/reserve", "method": "POST", "description": "Reserve warehouse inventory during checkout.", "deprecated": False, "current_status": "PRODUCTION"},
     ],
     "doc_pages": [
         {
@@ -78,6 +79,20 @@ If messages lag > 5000, scale the pod replica count to 5."""
 
 AuthService generates HS256 tokens valid for 24 hours.
 Services authenticate via `POST /auth/token` with client credentials."""
+        },
+        {
+            "id": "doc_inventory_guide",
+            "title": "Inventory Management & Stock Reservation Runbook",
+            "url": "https://wiki.acme.corp/services/inventory-guide",
+            "category": "API & Runbooks",
+            "last_updated": (datetime.now() - timedelta(days=75)).strftime("%Y-%m-%d"),
+            "content": """# Inventory Management Guide
+
+InventoryAPI maintains real-time catalog stock levels and reservations.
+Maintained by Charlie Davis.
+
+### REST Endpoints:
+- `POST /inventory/reserve` - Reserve item stock during checkout flow."""
         }
     ],
     "pull_requests": [
@@ -166,15 +181,18 @@ def seed_falkordb_graph() -> Dict[str, Any]:
         fb.edges.append({"type": "DOCUMENTS", "source": "doc_payment_deploy", "target": "srv_payment"})
         fb.edges.append({"type": "DOCUMENTS", "source": "doc_notification_ops", "target": "srv_notify"})
         fb.edges.append({"type": "DOCUMENTS", "source": "doc_auth_guide", "target": "srv_auth"})
+        fb.edges.append({"type": "DOCUMENTS", "source": "doc_inventory_guide", "target": "srv_inventory"})
 
         # Doc -> Authors
         fb.edges.append({"type": "AUTHORED_BY", "source": "doc_payment_deploy", "target": "dev_alice"})
         fb.edges.append({"type": "AUTHORED_BY", "source": "doc_notification_ops", "target": "dev_bob"})  # Sole author Bob (LEFT_COMPANY)
         fb.edges.append({"type": "AUTHORED_BY", "source": "doc_auth_guide", "target": "dev_alice"})
+        fb.edges.append({"type": "AUTHORED_BY", "source": "doc_inventory_guide", "target": "dev_charlie"})
 
         # Doc -> Endpoints
         fb.edges.append({"type": "REFERENCES", "source": "doc_payment_deploy", "target": "ep_v1_charge"})
         fb.edges.append({"type": "REFERENCES", "source": "doc_auth_guide", "target": "ep_auth_token"})
+        fb.edges.append({"type": "REFERENCES", "source": "doc_inventory_guide", "target": "ep_inventory_reserve"})
 
         # PR -> Service
         fb.edges.append({"type": "MODIFIED", "source": "pr_310", "target": "srv_payment"})
@@ -262,15 +280,18 @@ def seed_falkordb_graph() -> Dict[str, Any]:
         "MATCH (d:DocPage {id: 'doc_payment_deploy'}), (s:Service {id: 'srv_payment'}) MERGE (d)-[:DOCUMENTS]->(s)",
         "MATCH (d:DocPage {id: 'doc_notification_ops'}), (s:Service {id: 'srv_notify'}) MERGE (d)-[:DOCUMENTS]->(s)",
         "MATCH (d:DocPage {id: 'doc_auth_guide'}), (s:Service {id: 'srv_auth'}) MERGE (d)-[:DOCUMENTS]->(s)",
+        "MATCH (d:DocPage {id: 'doc_inventory_guide'}), (s:Service {id: 'srv_inventory'}) MERGE (d)-[:DOCUMENTS]->(s)",
 
         # Doc -> Authors
         "MATCH (d:DocPage {id: 'doc_payment_deploy'}), (dev:Developer {id: 'dev_alice'}) MERGE (d)-[:AUTHORED_BY]->(dev)",
         "MATCH (d:DocPage {id: 'doc_notification_ops'}), (dev:Developer {id: 'dev_bob'}) MERGE (d)-[:AUTHORED_BY]->(dev)",
         "MATCH (d:DocPage {id: 'doc_auth_guide'}), (dev:Developer {id: 'dev_alice'}) MERGE (d)-[:AUTHORED_BY]->(dev)",
+        "MATCH (d:DocPage {id: 'doc_inventory_guide'}), (dev:Developer {id: 'dev_charlie'}) MERGE (d)-[:AUTHORED_BY]->(dev)",
 
         # Doc -> Endpoint
         "MATCH (d:DocPage {id: 'doc_payment_deploy'}), (ep:Endpoint {id: 'ep_v1_charge'}) MERGE (d)-[:REFERENCES]->(ep)",
         "MATCH (d:DocPage {id: 'doc_auth_guide'}), (ep:Endpoint {id: 'ep_auth_token'}) MERGE (d)-[:REFERENCES]->(ep)",
+        "MATCH (d:DocPage {id: 'doc_inventory_guide'}), (ep:Endpoint {id: 'ep_inventory_reserve'}) MERGE (d)-[:REFERENCES]->(ep)",
 
         # PR -> Service
         "MATCH (pr:PullRequest {id: 'pr_310'}), (s:Service {id: 'srv_payment'}) MERGE (pr)-[:MODIFIED]->(s)",

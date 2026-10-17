@@ -80,16 +80,20 @@ RETURN doc.id AS doc_id,
 """
 
 # Query 5: Blast Radius Analysis
-# Calculates ripple effect across docs and services when an endpoint or PR changes
+# Calculates ripple effect across docs, endpoints, and services when a PR merges
 QUERY_BLAST_RADIUS = """
-MATCH (pr:PullRequest {number: $pr_number})-[:TOUCHED_ENDPOINT]->(ep:Endpoint)
-OPTIONAL MATCH (doc:DocPage)-[:REFERENCES]->(ep)
-OPTIONAL MATCH (doc)-[:HAS_SECTION]->(sec:Section)
-RETURN ep.path AS endpoint_path,
-       ep.method AS method,
-       ep.deprecated AS is_deprecated,
-       collect(DISTINCT doc.title) AS affected_docs,
-       collect(DISTINCT sec.title) AS affected_sections
+MATCH (pr:PullRequest {number: $pr_number})
+OPTIONAL MATCH (pr)-[:MODIFIED]->(s:Service)
+OPTIONAL MATCH (doc_s:DocPage)-[:DOCUMENTS]->(s)
+OPTIONAL MATCH (pr)-[:TOUCHED_ENDPOINT]->(ep:Endpoint)
+OPTIONAL MATCH (doc_ep:DocPage)-[:REFERENCES]->(ep)
+RETURN pr.number AS pr_number,
+       pr.title AS pr_title,
+       pr.diff_summary AS diff_summary,
+       collect(DISTINCT s.name) AS affected_services,
+       collect(DISTINCT ep.method + ' ' + ep.path + ' (' + CASE WHEN ep.deprecated THEN 'Deprecated' ELSE 'Active' END + ')') AS affected_endpoints,
+       collect(DISTINCT doc_s.title) AS service_docs,
+       collect(DISTINCT doc_ep.title) AS endpoint_docs
 """
 
 # Query 6: Full Graph Dump for Visualization

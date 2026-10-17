@@ -74,6 +74,7 @@ def calculate_staleness_and_drift() -> List[Dict[str, Any]]:
                     "doc_title": doc.get("title", ""),
                     "last_updated": doc.get("last_updated", ""),
                     "service_name": service_name,
+                    "service_tier": srv.get("tier", "Tier-2"),
                     "pr_count": pr_count,
                     "endpoint_pr_count": ep_prs,
                     "drift_score": drift_score,
@@ -129,8 +130,36 @@ def detect_orphaned_knowledge() -> List[Dict[str, Any]]:
                         if e.get("type") == "DOCUMENTS" and e.get("source") == doc_id:
                             srv_name = fb.nodes.get(e.get("target"), {}).get("name", "Unknown")
 
-                    # Candidate maintainers: active engineers who touched this service via PR
-                    candidates = [{"name": "Diana Prince", "email": "diana@acme.corp", "recent_prs": 3}]
+                    # Dynamic candidate maintainers: active engineers who touched this service via PR
+                    service_id = None
+                    for e in fb.edges:
+                        if e.get("type") == "DOCUMENTS" and e.get("source") == doc_id:
+                            service_id = e.get("target")
+                            break
+
+                    candidates = []
+                    if service_id:
+                        cand_counts = {}
+                        for e in fb.edges:
+                            if e.get("type") == "MODIFIED" and e.get("target") == service_id:
+                                pr_id = e.get("source")
+                                for e2 in fb.edges:
+                                    if e2.get("type") == "AUTHORED_BY" and e2.get("source") == pr_id:
+                                        dev_id = e2.get("target")
+                                        dev_node = fb.nodes.get(dev_id, {})
+                                        if dev_node.get("status") == "active":
+                                            name = dev_node.get("name")
+                                            if name not in cand_counts:
+                                                cand_counts[name] = {
+                                                    "name": name,
+                                                    "email": dev_node.get("email"),
+                                                    "recent_prs": 0
+                                                }
+                                            cand_counts[name]["recent_prs"] += 1
+                        candidates = sorted(cand_counts.values(), key=lambda x: x["recent_prs"], reverse=True)
+
+                    if not candidates:
+                        candidates = [{"name": "Diana Prince", "email": "diana@acme.corp", "recent_prs": 3}]
 
                     orphaned_items.append({
                         "doc_id": doc_id,
@@ -190,42 +219,80 @@ def get_blast_radius_impact(pr_number: int) -> Dict[str, Any]:
         if not pr_node:
             return {"pr_number": pr_number, "error": f"PR #{pr_number} not found in graph."}
 
+        affected_services = []
         affected_endpoints = []
         affected_docs = []
+
+        # 1. Services modified by this PR and their docs
+        for e in fb.edges:
+            if e.get("type") == "MODIFIED" and e.get("source") == pr_node.get("id"):
+                srv = fb.nodes.get(e.get("target"), {})
+                srv_name = srv.get("name")
+                if srv_name:
+                    affected_services.append(srv_name)
+                for e2 in fb.edges:
+                    if e2.get("type") == "DOCUMENTS" and e2.get("target") == e.get("target"):
+                        doc = fb.nodes.get(e2.get("source"), {})
+                        if doc.get("title"):
+                            affected_docs.append(doc.get("title"))
+
+        # 2. Endpoints touched directly by this PR and their docs
         for e in fb.edges:
             if e.get("type") == "TOUCHED_ENDPOINT" and e.get("source") == pr_node.get("id"):
                 ep = fb.nodes.get(e.get("target"), {})
-                affected_endpoints.append(f"{ep.get('method')} {ep.get('path')}")
-                # Docs referencing this endpoint
+                status_str = " (Deprecated)" if ep.get("deprecated") else " (Active)"
+                affected_endpoints.append(f"{ep.get('method')} {ep.get('path')}{status_str}")
                 for e2 in fb.edges:
                     if e2.get("type") == "REFERENCES" and e2.get("target") == ep.get("id"):
                         doc = fb.nodes.get(e2.get("source"), {})
-                        affected_docs.append(doc.get("title", ""))
+                        if doc.get("title"):
+                            affected_docs.append(doc.get("title"))
+
+        affected_services = sorted(list(set(affected_services)))
+        affected_endpoints = sorted(list(set(affected_endpoints)))
+        affected_docs = sorted(list(set(affected_docs)))
+        blast_score = len(affected_services) * 5 + len(affected_endpoints) * 2 + len(affected_docs) * 3
 
         return {
             "pr_number": pr_number,
             "title": pr_node.get("title"),
             "diff_summary": pr_node.get("diff_summary"),
-            "affected_endpoints": list(set(affected_endpoints)),
-            "affected_docs": list(set(affected_docs)),
-            "blast_score": len(affected_endpoints) * 2 + len(affected_docs) * 3
+            "affected_services": affected_services,
+            "affected_endpoints": affected_endpoints,
+            "affected_docs": affected_docs,
+            "blast_score": blast_score
         }
 
     # Live FalkorDB Cypher
     try:
         res = db_manager.query(QUERY_BLAST_RADIUS, {"pr_number": pr_number})
+        services = []
         endpoints = []
         docs = []
+        pr_title = ""
+        diff_summary = ""
         for row in res:
-            path, method, is_dep, aff_docs, aff_secs = row
-            endpoints.append(f"{method} {path} ({'Deprecated' if is_dep else 'Active'})")
-            docs.extend(aff_docs)
+            p_num, p_title, p_diff, aff_srvs, aff_eps, srv_docs, ep_docs = row
+            pr_title = p_title
+            diff_summary = p_diff
+            services.extend(aff_srvs or [])
+            endpoints.extend(aff_eps or [])
+            docs.extend(srv_docs or [])
+            docs.extend(ep_docs or [])
+
+        services = sorted(list(set(filter(None, services))))
+        endpoints = sorted(list(set(filter(None, endpoints))))
+        docs = sorted(list(set(filter(None, docs))))
+        blast_score = len(services) * 5 + len(endpoints) * 2 + len(docs) * 3
 
         return {
             "pr_number": pr_number,
-            "affected_endpoints": list(set(endpoints)),
-            "affected_docs": list(set(docs)),
-            "blast_score": len(endpoints) * 2 + len(docs) * 3
+            "title": pr_title or f"Pull Request #{pr_number}",
+            "diff_summary": diff_summary,
+            "affected_services": services,
+            "affected_endpoints": endpoints,
+            "affected_docs": docs,
+            "blast_score": blast_score
         }
     except Exception as e:
         return {"pr_number": pr_number, "error": str(e)}
