@@ -117,8 +117,8 @@ with st.sidebar:
                 f"*(If the instance is still 'Deploying' in FalkorDB console, wait until it turns Active)*"
             )
             if st.button("🔄 Retry Cloud Connection", use_container_width=True):
-                if db_manager.connect():
-                    st.success("Connected!")
+                if db_manager.connect(force=True):
+                    st.success("Connected to FalkorDB Cloud!")
                 else:
                     st.error("Still unable to reach cloud host.")
                 st.rerun()
