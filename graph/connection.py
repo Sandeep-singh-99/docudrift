@@ -205,42 +205,86 @@ class InMemoryFalkorFallback:
 class FalkorDBManager:
     """Singleton manager for connecting to FalkorDB or falling back gracefully."""
     def __init__(self):
-        self.host = os.getenv("FALKORDB_HOST", "localhost")
-        self.port = int(os.getenv("FALKORDB_PORT", "6379"))
-        self.password = os.getenv("FALKORDB_PASSWORD", None) or None
-        self.graph_name = os.getenv("FALKORDB_GRAPH_NAME", "DocuDrift")
+        self.reload_config()
         self.client = None
         self.graph = None
         self.is_connected = False
         self.is_fallback = False
+        self.last_error = ""
         self._fallback_instance = InMemoryFalkorFallback(self.graph_name)
         self.connect()
 
+    def reload_config(self):
+        load_dotenv(override=True)
+        self.host = os.getenv("FALKORDB_HOST", "localhost")
+        self.port = int(os.getenv("FALKORDB_PORT", "6379"))
+        self.password = os.getenv("FALKORDB_PASSWORD", None) or None
+        self.username = os.getenv("FALKORDB_USERNAME", "falkordb" if self.password else None)
+        self.graph_name = os.getenv("FALKORDB_GRAPH_NAME", "DocuDrift")
+        self.is_cloud = self.host not in ["localhost", "127.0.0.1", "falkordb", "0.0.0.0"]
+
     def connect(self) -> bool:
+        self.reload_config()
         try:
             import falkordb
-            self.client = falkordb.FalkorDB(
-                host=self.host,
-                port=self.port,
-                password=self.password
-            )
-            # Test ping
-            self.graph = self.client.select_graph(self.graph_name)
-            # Try a lightweight query to verify connectivity
-            self.graph.query("RETURN 1 AS ping")
-            self.is_connected = True
-            self.is_fallback = False
+            
+            # For cloud instances, attempt with SSL first, then fallback to non-SSL
+            connection_attempts = []
+            if self.is_cloud:
+                connection_attempts.append({"ssl": True, "username": self.username})
+                connection_attempts.append({"ssl": False, "username": self.username})
+                connection_attempts.append({"ssl": True, "username": None})
+            else:
+                connection_attempts.append({"ssl": False, "username": None})
+
+            connected = False
+            last_err = None
+
+            for opts in connection_attempts:
+                try:
+                    kwargs = {
+                        "host": self.host,
+                        "port": self.port,
+                        "password": self.password,
+                    }
+                    if opts.get("ssl"):
+                        kwargs["ssl"] = True
+                    if opts.get("username"):
+                        kwargs["username"] = opts.get("username")
+
+                    client = falkordb.FalkorDB(**kwargs)
+                    graph = client.select_graph(self.graph_name)
+                    # Verify connectivity
+                    graph.query("RETURN 1 AS ping")
+                    self.client = client
+                    self.graph = graph
+                    self.is_connected = True
+                    self.is_fallback = False
+                    self.last_error = ""
+                    connected = True
+                    break
+                except Exception as e:
+                    last_err = e
+
+            if not connected:
+                self.is_connected = False
+                self.is_fallback = True
+                self.graph = self._fallback_instance
+                self.last_error = str(last_err) if last_err else "Connection failed"
+                return False
+
             return True
-        except Exception:
+        except Exception as e:
             self.is_connected = False
             self.is_fallback = True
             self.graph = self._fallback_instance
+            self.last_error = str(e)
             return False
 
     def query(self, cypher_query: str, params: Optional[Dict[str, Any]] = None) -> FalkorDBResultWrapper:
         """Execute a Cypher query on FalkorDB or the fallback engine."""
         if not self.is_connected or self.is_fallback:
-            # Try reconnecting in case Docker just spun up
+            # Try reconnecting in case Docker or Cloud just became ready
             if self.connect():
                 raw = self.graph.query(cypher_query, params)
                 return FalkorDBResultWrapper(raw)
@@ -260,9 +304,11 @@ class FalkorDBManager:
         return {
             "connected": self.is_connected,
             "is_fallback": self.is_fallback,
+            "is_cloud": self.is_cloud,
             "host": self.host,
             "port": self.port,
             "graph_name": self.graph_name,
+            "last_error": self.last_error,
             "mode": "FalkorDB (Live Server)" if self.is_connected else "FalkorDB In-Memory Standby Engine"
         }
 

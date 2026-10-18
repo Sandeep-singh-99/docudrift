@@ -106,9 +106,24 @@ with st.sidebar:
 
     db_status = db_manager.get_status()
     if db_status["connected"]:
-        st.success(f"🟢 **Connected to Live FalkorDB**\n`{db_status['host']}:{db_status['port']}`")
+        target_label = "FalkorDB Cloud" if db_status.get("is_cloud") else "Local FalkorDB"
+        st.success(f"🟢 **Connected to {target_label}**\n`{db_status['host']}:{db_status['port']}`")
     else:
-        st.warning(f"🟡 **{db_status['mode']}**\n(Docker standby - run `docker compose up -d` for live FalkorDB server)")
+        if db_status.get("is_cloud"):
+            err_msg = db_status.get("last_error") or "Host unreachable"
+            st.warning(
+                f"🟡 **FalkorDB In-Memory Standby Engine**\n\n"
+                f"Connecting to Cloud failed: `{err_msg[:90]}`\n\n"
+                f"*(If the instance is still 'Deploying' in FalkorDB console, wait until it turns Active)*"
+            )
+            if st.button("🔄 Retry Cloud Connection", use_container_width=True):
+                if db_manager.connect():
+                    st.success("Connected!")
+                else:
+                    st.error("Still unable to reach cloud host.")
+                st.rerun()
+        else:
+            st.warning(f"🟡 **{db_status['mode']}**\n(Docker standby - run `docker compose up -d` for live FalkorDB server)")
 
     st.markdown("---")
     st.subheader("⚡ Graph Actions")
